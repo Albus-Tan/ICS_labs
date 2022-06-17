@@ -1,0 +1,138 @@
+#/* $begin ncopy-ys */
+##################################################################
+# ncopy.ys - Copy a src block of len words to dst.
+# Return the number of positive words (>0) contained in src.
+#
+# Include your name and ID here.
+#
+# Tanziming 520021910607
+#
+# Describe how and why you modified the baseline code.
+#
+# 1. use iaddq:
+#		using iaddq V,rB will combine two instructions irmovq and addq
+#		into one step. Since there are many ++, -- operations in ys code,
+#		this change will be of great help. So I modify pipe-full.hcl to
+#		add iaddq and change all instruction with continously irmovq and
+#		addq to iaddq in ncopy.ys.
+#
+# 2. change order to remove instruction:
+#		For these lines below 
+#				iaddq $-1, %rdx
+#				......
+#				andq %rdx,%rdx
+#				jg Loop
+#		The order of ... and iaddq $-1, %rdx does not matter, so we can
+#		change the order of them to
+#				......
+#				iaddq $-1, %rdx
+#				andq %rdx,%rdx  # then we can remove this line
+#				jg Loop
+#		Considering we have already get the correct CC, we can remove last line,
+#		which means we reduce 1 step each loop.
+#
+# 3. remove xorq %rax,%rax
+#		Since the initial value of %rax is 0, we can simply remove this line at head.
+#
+# 4. loop unrolling:
+#		Since there is a loop in function, we can adopt loop unrolling
+#		to decrease loop times. After trying unlooping for 4,5,6,7 and
+#		8 times, I find that 6 times is the most efficient. Therefore I
+#		unloop for 6 times at last.
+#
+# 5. avoid load-use hazard:
+#		For these lines below 
+#				mrmovq (%rdi), %r10
+#				rmmovq %r10, (%rsi)
+#		every time going through these two lines, we will have load-use
+#		hazard and generate one bubble, wasting one cycle. So we can change 
+#		order of instruction to make sure one other instruction between 
+#		these two. Then we can avoid load-use hazard.
+#				mrmovq (%rdi), %r10	# read val from src...
+#				mrmovq 8(%rdi), %r9	# load one more ahead
+#				rmmovq %r10, (%rsi)	# ...and store it to dst
+#		So I load one more ahead and store them in two different register.
+#		
+#
+#
+##################################################################
+# Do not modify this portion
+# Function prologue.
+# %rdi = src, %rsi = dst, %rdx = len
+ncopy:
+
+##################################################################
+# You can modify this portion
+	# Loop header
+	andq %rdx,%rdx		# len <= 0?
+	jle Done		# if so, goto Done:
+test:  				# test len >= 6
+	iaddq $-6, %rdx
+	jge Loop			# if len >= 6, goto Loop:
+	iaddq $6, %rdx     # add 6 back
+	je Done
+
+# for rest of len
+rest:
+	mrmovq (%rdi), %r10	# read val from src...
+	rmmovq %r10, (%rsi)	# ...and store it to dst
+	andq %r10, %r10		# val <= 0?
+	jle Npos		# if so, goto Npos:
+	iaddq $1, %rax  # count++
+Npos:
+	iaddq $8, %rdi		# src++
+	iaddq $8, %rsi		# dst++
+	iaddq $-1, %rdx		# len--
+	jg rest			# if so, goto rest
+	ret
+
+# unloop for 6 times when len >= 6
+Loop:	
+	mrmovq (%rdi), %r10	# read val from src...
+	mrmovq 8(%rdi), %r9	# load one more ahead
+	rmmovq %r10, (%rsi)	# ...and store it to dst
+	andq %r10, %r10		# val <= 0?
+	jle Loop1		# if so, goto next Loopi
+	iaddq $1, %rax  # count++
+Loop1:	
+	mrmovq 16(%rdi), %r10	# read val from src...
+	rmmovq %r9, 8(%rsi)	# ...and store it to dst
+	andq %r9, %r9		# val <= 0?
+	jle Loop2		# if so, goto next Loopi
+	iaddq $1, %rax  # count++
+Loop2:	
+	mrmovq 24(%rdi), %r9	# read val from src...
+	rmmovq %r10, 16(%rsi)	# ...and store it to dst
+	andq %r10, %r10		# val <= 0?
+	jle Loop3		# if so, goto next Loopi
+	iaddq $1, %rax  # count++
+Loop3:	
+	mrmovq 32(%rdi), %r10	# read val from src...
+	rmmovq %r9, 24(%rsi)	# ...and store it to dst
+	andq %r9, %r9		# val <= 0?
+	jle Loop4		# if so, goto next Loopi
+	iaddq $1, %rax  # count++
+Loop4:	
+	mrmovq 40(%rdi), %r9	# read val from src...
+	rmmovq %r10, 32(%rsi)	# ...and store it to dst
+	andq %r10, %r10		# val <= 0?
+	jle Loop5		# if so, goto next Loopi
+	iaddq $1, %rax  # count++
+Loop5:	
+	rmmovq %r9, 40(%rsi)	# ...and store it to dst
+	iaddq $48, %rdi		# src++
+	iaddq $48, %rsi		# dst++
+	andq %r9, %r9		# val <= 0?
+	jle test		# if so, goto test
+	iaddq $1, %rax  # count++
+	jmp test
+
+##################################################################
+# Do not modify the following section of code
+# Function epilogue.
+Done:
+	ret
+##################################################################
+# Keep the following label at the end of your function
+End:
+#/* $end ncopy-ys */

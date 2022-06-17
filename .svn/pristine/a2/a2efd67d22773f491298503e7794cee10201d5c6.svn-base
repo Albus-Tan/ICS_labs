@@ -1,0 +1,253 @@
+#/* $begin ncopy-ys */
+##################################################################
+# ncopy.ys - Copy a src block of len words to dst.
+# Return the number of positive words (>0) contained in src.
+#
+# Include your name and ID here.
+#
+# Tanziming 520021910607
+#
+# Describe how and why you modified the baseline code.
+#
+# 1. use iaddq:
+#		using iaddq V,rB will combine two instructions irmovq and addq
+#		into one step. Since there are many ++, -- operations in ys code,
+#		this change will be of great help. So I modify pipe-full.hcl to
+#		add iaddq and change all instruction with continously irmovq and
+#		addq to iaddq in ncopy.ys.
+#
+# 2. change order to remove instruction:
+#		For these lines below 
+#				iaddq $-1, %rdx
+#				......
+#				andq %rdx,%rdx
+#				jg Loop
+#		The order of ... and iaddq $-1, %rdx does not matter, so we can
+#		change the order of them to
+#				......
+#				iaddq $-1, %rdx
+#				andq %rdx,%rdx  # then we can remove this line
+#				jg Loop
+#		Considering we have already get the correct CC, we can remove last line,
+#		which means we reduce 1 step each loop.
+#
+# 3. remove xorq %rax,%rax
+#		Since the initial value of %rax is 0, we can simply remove this line at head.
+#
+# 4. loop unrolling:
+#		Since there is a loop in function, we can adopt loop unrolling
+#		to decrease loop times. After trying unlooping for 7,8,9 and
+#		10 times, I find that 10 times is the most efficient. Therefore I
+#		unloop for 10 times at last.
+#
+# 5. avoid load-use hazard in loop:
+#		For these lines below 
+#				mrmovq (%rdi), %r10
+#				rmmovq %r10, (%rsi)
+#		every time going through these two lines, we will have load-use
+#		hazard and generate one bubble, wasting one cycle. So we can change 
+#		order of instruction to make sure one other instruction between 
+#		these two. Then we can avoid load-use hazard.
+#				mrmovq (%rdi), %r10	# read val from src...
+#				mrmovq 8(%rdi), %r9	# load one more ahead
+#				rmmovq %r10, (%rsi)	# ...and store it to dst
+#		So I load one more ahead and store them in two different register.
+#		
+# 6. try to use jump table for the rest, with improvment
+#
+# 7. Inspired by binary tree, deal with rest under idea of tree, get better performance
+#
+# 8. avoid load-use hazard for the rest by trick in CC
+#
+# 9. change some instruction pos for slight improvment
+#
+##################################################################
+# Do not modify this portion
+# Function prologue.
+# %rdi = src, %rsi = dst, %rdx = len
+ncopy:
+
+##################################################################
+# You can modify this portion
+	# Loop header
+test:  				# test len >= 10
+	iaddq $-10, %rdx
+	jl Judge			# if len >= 10, goto Loop:
+
+# unloop for 10 times when len >= 10
+Loop:	
+	mrmovq (%rdi), %r10	
+	mrmovq 8(%rdi), %r9	
+	rmmovq %r10, (%rsi)
+	andq %r10, %r10	
+	jle Loop1
+	iaddq $1, %rax 
+Loop1:	
+	mrmovq 16(%rdi), %r10
+	rmmovq %r9, 8(%rsi)
+	andq %r9, %r9
+	jle Loop2
+	iaddq $1, %rax
+Loop2:	
+	mrmovq 24(%rdi), %r9
+	rmmovq %r10, 16(%rsi)
+	andq %r10, %r10	
+	jle Loop3
+	iaddq $1, %rax 
+Loop3:	
+	mrmovq 32(%rdi), %r10
+	rmmovq %r9, 24(%rsi)
+	andq %r9, %r9
+	jle Loop4
+	iaddq $1, %rax
+Loop4:	
+	mrmovq 40(%rdi), %r9
+	rmmovq %r10, 32(%rsi)
+	andq %r10, %r10	
+	jle Loop5
+	iaddq $1, %rax
+Loop5:	
+	mrmovq 48(%rdi), %r10
+	rmmovq %r9, 40(%rsi)
+	andq %r9, %r9
+	jle Loop6
+	iaddq $1, %rax
+Loop6:	
+	mrmovq 56(%rdi), %r9
+	rmmovq %r10, 48(%rsi)
+	andq %r10, %r10	
+	jle Loop7
+	iaddq $1, %rax
+Loop7:	
+	mrmovq 64(%rdi), %r10
+	rmmovq %r9, 56(%rsi)
+	andq %r9, %r9	
+	jle Loop8
+	iaddq $1, %rax
+Loop8:	
+	mrmovq 72(%rdi), %r9
+	rmmovq %r10, 64(%rsi)
+	andq %r10, %r10	
+	jle Loop9
+	iaddq $1, %rax      
+Loop9:	
+	rmmovq %r9, 72(%rsi)
+	iaddq $80, %rdi
+	iaddq $80, %rsi	
+	andq %r9, %r9	
+	jle test		
+	iaddq $1, %rax
+	iaddq $-10, %rdx
+	jge Loop
+
+Judge:
+	iaddq $7, %rdx  # test len and 3
+	jl LESS3
+	jg MORE3
+	je rest3
+
+LESS3:
+	iaddq $2, %rdx  # test len and 1
+	je rest1
+	iaddq $-1, %rdx  # test len and 2
+	je rest2
+	ret
+
+MORE3:
+	iaddq $-3, %rdx  # test len and 6
+	jg MORE6
+	je rest6
+	iaddq $1, %rdx  # test len and 5
+	jl rest4
+	je rest5
+
+MORE6:
+	iaddq $-2, %rdx  # test len and 8
+	jl rest7
+	mrmovq 64(%rdi), %r9
+	je rest8
+	
+# for rest of len
+# set cc for current case and
+# handle add iaddq $1, %rax the case before current
+rest9:
+	rmmovq %r9, 64(%rsi)
+	andq %r9, %r9
+
+rest8:
+	mrmovq 56(%rdi), %r10
+	jle rest8_
+	iaddq $1, %rax
+rest8_:
+	rmmovq %r10, 56(%rsi)
+	andq %r10, %r10
+
+rest7:
+	mrmovq 48(%rdi), %r9
+	jle rest7_
+	iaddq $1, %rax
+rest7_:
+	rmmovq %r9, 48(%rsi)
+	andq %r9, %r9
+
+rest6:
+	mrmovq 40(%rdi), %r10
+	jle rest6_
+	iaddq $1, %rax
+rest6_:
+	rmmovq %r10, 40(%rsi)
+	andq %r10, %r10
+	
+rest5:
+	mrmovq 32(%rdi), %r9
+	jle rest5_
+	iaddq $1, %rax
+rest5_:
+	rmmovq %r9, 32(%rsi)
+	andq %r9, %r9
+	
+rest4:
+	mrmovq 24(%rdi), %r10
+	jle rest4_	
+	iaddq $1, %rax
+rest4_:
+	rmmovq %r10, 24(%rsi)
+	andq %r10, %r10
+	
+rest3:
+	mrmovq 16(%rdi), %r9
+	jle rest3_
+	iaddq $1, %rax
+rest3_:
+	rmmovq %r9, 16(%rsi)
+	andq %r9, %r9
+	
+rest2:
+	mrmovq 8(%rdi), %r10
+	jle rest2_
+	iaddq $1, %rax
+rest2_:
+	rmmovq %r10, 8(%rsi)
+	andq %r10, %r10
+	
+rest1:
+	mrmovq (%rdi), %r8
+	jle rest1_
+	iaddq $1, %rax
+rest1_:
+	rmmovq %r8, (%rsi)
+	andq %r8, %r8
+	jle Npos
+	iaddq $1, %rax
+Npos:
+	ret
+
+##################################################################
+# Do not modify the following section of code
+# Function epilogue.
+Done:
+	ret
+##################################################################
+# Keep the following label at the end of your function
+End:
+#/* $end ncopy-ys */

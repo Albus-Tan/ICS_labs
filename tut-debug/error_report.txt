@@ -1,0 +1,131 @@
+/*
+ * BUG#0
+ * description: 
+     miss semicolon
+ * location: 
+ *   int a = 10  (line 18)
+ * evidence: 
+ *   test.c:19: error: two or more data types in declaration specifiers
+ */
+
+BUG#1
+description:
+  miss ;
+location:
+  enum { buf_size = buf_nrec * 100} (line 52)
+evidence:
+  gen_sort.c:54:9: error: expected ‘;’, identifier or ‘(’ before ‘struct’
+   typedef struct record {
+           ^~~~~~
+
+
+BUG#2
+description:
+  miss ;
+location:
+  } record_t; (line 58)
+evidence:
+gen_sort.c:58:11: error: expected ‘;’ before ‘static’
+ } record_t
+           ^
+           ;
+
+
+BUG#3
+description:
+ wrong use of *record
+location:
+   gen_rec(record *rec) (line 114)
+evidence:
+gen_sort.c:114:9: error: unknown type name ‘record’; did you mean ‘record_t’?
+ gen_rec(record *rec)
+         ^~~~~~
+         record_t
+
+
+
+BUG#4
+description:
+  ‘FILE’ is defined in header ‘<stdio.h>’;forget to include
+location:
+  FILE *file = fopen(fn, "r"); (line 187)
+evidence:
+gen_sort.c:187:2: error: unknown type name ‘FILE’
+  FILE *file = fopen(fn, "r");
+  ^~~~
+gen_sort.c:187:2: note: ‘FILE’ is defined in header ‘<stdio.h>’; did you forget to ‘#include <stdio.h>’?
+
+
+
+BUG#5
+description:
+ miss {
+location:
+ if (!file) (line 189)
+evidence:
+en_sort.c:195:2: error: expected identifier or ‘(’ before ‘while’
+  while (cur_rec < rec_max) {
+  ^~~~~
+
+
+
+BUG#6
+description:
+  wrong i/j: for ++j --> ++i
+location:
+  for(...;...;++i) line 129
+evidence:
+gen_sort running ... with [100, goal]
+Segmentation fault
+195
+199
+151
+step in gen_rec
+128
+Segmentation fault
+
+
+
+
+BUG#7
+description:
+r --> w
+location:
+FILE *file = fopen(fn, "r") (line 201)
+evidence:
+step in gen_rec
+128
+139
+gen_rec finished
+200
+Segmentation fault
+
+
+
+BUG#8
+description:
+ forget recno_len
+location:
+ rec_len = key_len + pad_len + recno_len (line 50)
+evidence:
+ wrong num
+
+
+
+BUG#9
+description:
+-->buf_size
+location:
+(char*)malloc(buf_size) (line 53)
+evidence:
+segmantation fault
+shuzu yuejie
+
+
+BUG#10
+description:
+<= --> =
+location:
+cnt <= buf_nrec(line 153)
+evidence:
+segmantation fault (wrong ending clause in for())

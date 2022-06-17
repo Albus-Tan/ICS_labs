@@ -1,0 +1,524 @@
+/*
+ * 520021910607 Tanziming
+ * proxy.c - ICS Web proxy
+ *
+ *
+ */
+
+#include "csapp.h"
+#include <stdarg.h>
+#include <sys/select.h>
+
+#define DEBUG 0
+#define GROUP_SIZE 8192
+#define NTHREADS 4
+#define SBUFSIZE 16
+
+sem_t mutex;
+sem_t o;
+
+/*
+ * Function prototypes
+ */
+int parse_uri(char *uri, char *target_addr, char *path, char *port);
+void format_log_entry(char *logstring, struct sockaddr_in *sockaddr, char *uri, size_t size);
+void doProxy(int connfd, struct sockaddr_in *sockaddr);
+void *thread(void *vargp);
+
+// Rio wrappers
+ssize_t Rio_readn_w(int fd, void* usrbuf, size_t n)
+{
+    ssize_t rc;
+    if((rc = rio_readn(fd, usrbuf, n)) < 0){
+        return 0;
+    }
+    return rc;
+}
+
+ssize_t Rio_readnb_w(rio_t *rp, void *usrbuf, size_t maxlen)
+{
+    ssize_t rc;
+    if((rc = rio_readnb(rp, usrbuf, maxlen)) != maxlen){
+        return 0;
+    }
+    return rc;
+}
+
+ssize_t Rio_writen_w(int fd, void *usrbuf, size_t n)
+{
+    ssize_t c;
+    if((c = rio_writen(fd, usrbuf, n)) != n){
+        return 0;
+    }
+    return c;
+}
+
+ssize_t Rio_readlineb_w(rio_t *rp, void *usrbuf, size_t maxlen)
+{
+    ssize_t rc;
+    if((rc = rio_readlineb(rp, usrbuf, maxlen)) < 0){
+        return 0;
+    }
+    return rc;
+}
+
+typedef struct vargp {
+    int connfd;
+    struct sockaddr_in clientaddr;
+} vargp_t;
+
+typedef struct {
+    int *buf;
+    int n;
+    int front;
+    int rear;
+    sem_t mutex;
+    sem_t slots;
+    sem_t items;
+} sbuf_t;
+
+void sbuf_init(sbuf_t *sp, int n)
+{
+    sp->buf = Calloc(n, sizeof(int));
+    sp->n = n;
+    sp->front = sp->rear = 0;
+    Sem_init(&sp->mutex, 0 ,1);
+    Sem_init(&sp->slots, 0 ,n);
+    Sem_init(&sp->items, 0 ,0);
+}
+
+void sbuf_deinit(sbuf_t *sp)
+{
+    Free(sp->buf);
+}
+
+void sbuf_insert(sbuf_t* sp, int item)
+{
+    P(&sp->slots);
+    P(&sp->mutex);
+    sp->buf[(++sp->rear)%(sp->n)] = item;
+    V(&sp->mutex);
+    V(&sp->items);
+}
+
+int sbuf_remove(sbuf_t *sp)
+{
+    int item;
+    P(&sp->items);
+    P(&sp->mutex);
+    item = sp->buf[(++sp->front)%(sp->n)];
+    V(&sp->mutex);
+    V(&sp->slots);
+    return item;
+}
+
+void *thread(void *vargp)
+{
+    Pthread_detach(pthread_self());
+    vargp_t* vargp_self = (vargp_t*) vargp;
+    int connfd = vargp_self->connfd;
+    (vargp_self->clientaddr).sin_family = AF_INET;
+    doProxy(connfd, &(vargp_self->clientaddr));
+    Close(connfd);
+    Free(vargp);
+    return NULL;
+}
+
+
+// void *thread(void *vargp)
+// {
+//     Pthread_detach(pthread_self());
+//     while(1) {
+//         int connfd = sbuf_remove(&sbuf);
+//         //doProxy(connfd);
+//         Close(connfd);
+//     }
+// }
+
+// sbuf_t sbuf;
+
+/*
+ * main - Main routine for the proxy program
+ */
+int main(int argc, char **argv)
+{
+
+    
+    int listenfd, connfd;
+    char hostname[MAXLINE], port[MAXLINE];
+    socklen_t clientlen;
+    struct sockaddr_in clientaddr;
+    vargp_t* vargp;
+    pthread_t tid;
+
+    // Ignore SIGPIPE
+    Signal(SIGPIPE,SIG_IGN);
+
+    /* Check arguments */
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <port number>\n", argv[0]);
+        exit(0);
+    }
+
+    Sem_init(&mutex, 0 ,1);
+    Sem_init(&o, 0 ,1);
+
+    listenfd = Open_listenfd(argv[1]);
+    while(1){
+        vargp = Malloc(sizeof(vargp_t));
+        clientlen = sizeof(clientaddr);
+        vargp->connfd = Accept(listenfd, (SA*)&(vargp->clientaddr), &clientlen);
+    
+        Getnameinfo((SA *)&(vargp->clientaddr), clientlen, hostname, MAXLINE, port, MAXLINE, NI_NUMERICHOST);
+        
+        Pthread_create(&tid, NULL, thread, vargp);
+        if(DEBUG){
+            P(&mutex);
+            printf("Accepted connection from (%s,%s)\n", hostname, port);
+            V(&mutex);
+        }
+        // // main routine
+        // doProxy(connfd, &clientaddr);
+        // Close(connfd);
+    }
+
+    Close(listenfd);
+    exit(0);
+
+
+    // // Prethreading
+    // int i, listenfd, connfd;
+    // socklen_t clientlen;
+    // struct sockaddr_storage clientaddr;
+    // pthread_t tid;
+
+    // /* Check arguments */
+    // if (argc != 2) {
+    //     fprintf(stderr, "Usage: %s <port number>\n", argv[0]);
+    //     exit(0);
+    // }
+
+    // listenfd = Open_listenfd(argv[1]);
+
+    // sbuf_init(&sbuf, SBUFSIZE);
+    // for(int i = 0; i < NTHREADS; i++){
+    //     Pthread_create(&tid, NULL, thread, NULL);
+    // }
+
+    // while(1){
+    //     clientlen = sizeof(struct sockaddr_storage);
+    //     connfd = Accept(listenfd, (SA*) &clientaddr, &clientlen);
+    //     sbuf_insert(&sbuf, connfd);
+    // }
+
+
+}
+
+void doProxy(int connfd, struct sockaddr_in *sockaddr)
+{
+    char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
+    rio_t rio_request, rio_response;
+    int size = 0;
+
+    if(DEBUG){
+        P(&mutex);
+        printf("Service start:\n");
+        printf("connfd %d\n", connfd);
+        V(&mutex);
+    }
+
+    // read request line and headers
+    Rio_readinitb(&rio_request, connfd);
+    if(Rio_readlineb_w(&rio_request, buf, MAXLINE) <= 0) {return;}
+
+    if(DEBUG){
+        P(&mutex);
+        printf("Requset headers:\n");
+        printf("%s", buf);
+        V(&mutex);
+    }
+
+    sscanf(buf, "%s %s %s", method, uri, version);
+
+    if(DEBUG){
+        P(&mutex);
+        printf("method: %s , uri: %s , version: %s\n", method, uri, version);
+        V(&mutex);
+    }
+
+
+    // parse URI
+    char hostname[MAXLINE], pathname[MAXLINE], port[MAXLINE];
+    if(parse_uri(uri, hostname, pathname, port) == -1){
+        unix_error("parse_uri error\n");
+        return;
+    }
+
+
+    // generate request
+    char request[MAXLINE];
+    sprintf(request, "%s /%s %s\r\n", method, pathname, version);
+
+    if(DEBUG){
+        P(&mutex);
+        printf("Generate request to end server, request: %s", request);
+        printf("Start to send request to end server\n");
+        V(&mutex);
+    }
+
+    
+    // read header
+    ssize_t n, cnt = 0, content_len = 0;
+    if((n = Rio_readlineb_w(&rio_request, buf, MAXLINE)) <= 0) return;
+    while(strcmp(buf, "\r\n")){
+
+        // get content length
+        if(!strncasecmp(buf, "Content-Length: ", 14)){
+            sscanf(buf+15, "%zu", &content_len);
+            if(DEBUG){
+            P(&mutex);
+            printf("Receive Content-Length:  %d\n", content_len);
+            V(&mutex);
+            }
+        }
+
+        sprintf(request, "%s%s", request, buf);
+
+        cnt += n;
+        if(DEBUG){
+            P(&mutex);
+            printf("%s", buf);
+            V(&mutex);
+        }
+        // if(Rio_writen_w(clientfd, buf, strlen(buf)) != strlen(buf)) {Close(clientfd);return;}
+        if((n = Rio_readlineb_w(&rio_request, buf, MAXLINE)) <= 0) return;
+    }
+    cnt += n;
+    sprintf(request, "%s%s", request, buf);
+    if(DEBUG){
+        P(&mutex);
+        printf("%s", buf);
+        V(&mutex);
+    }
+    // if(Rio_writen_w(clientfd, buf, strlen(buf)) != strlen(buf)) {Close(clientfd);return;}
+
+
+    // connect to end server as a client
+    // P(&o);
+    int clientfd = Open_clientfd(hostname, port);
+    // V(&o);
+    if(clientfd <= 0) return;
+    
+    if(DEBUG){
+        P(&mutex);
+        printf("Connect to end server as a client, clientfd: %d\n", clientfd);
+        V(&mutex);
+    }
+
+    // send request and header to the end server
+    if(Rio_writen_w(clientfd, request, strlen(request)) <= 0){
+        printf("Fail to send request\n");
+        close(clientfd);
+        return;
+    }
+
+    if(DEBUG){
+        P(&mutex);
+        printf("Read header\n");
+        V(&mutex);
+    }
+
+	Rio_readinitb(&rio_response, clientfd);
+
+    // send body if method POST
+    if(content_len != 0){
+		size_t group_size = 1;
+		while (content_len > 0)
+		{
+			if(content_len > GROUP_SIZE) group_size = GROUP_SIZE;
+			else group_size = content_len;
+			if(Rio_readnb_w(&rio_request, buf, group_size) == 0) {Close(clientfd);return;}
+        	if(Rio_writen_w(clientfd,buf,group_size) != group_size) {Close(clientfd);return;}
+			content_len -= group_size;
+		}
+    }
+
+
+    if(DEBUG){
+        P(&mutex);
+        printf("Waiting for response\n");
+        V(&mutex);
+    }
+
+    // receive response from the end server
+    n = 0;
+    char response[MAXLINE];
+    size_t content_length = 0;
+    while((n = Rio_readlineb_w(&rio_response, response, MAXLINE)) != 0){
+
+        if(DEBUG){
+            P(&mutex);
+            printf("Receive response header from end server, response header: %s", response);
+            printf("Start to send response header to browser\n");
+            V(&mutex);
+        }
+
+        // add size
+        size += n;
+
+        // get content length
+        if(!strncasecmp(response, "Content-Length: ", 14)){
+            sscanf(response+15, "%zu", &content_length);
+            if(DEBUG){
+                P(&mutex);
+                printf("Receive Content-Length:  %d\n", content_length);
+                V(&mutex);
+            }
+        }
+
+        // forward to browser
+        if(Rio_writen_w(connfd, response, strlen(response)) != strlen(response)) {Close(clientfd);return;}
+
+        // check end
+        if(!strncmp(response, "\r\n", 2)) break;
+    }
+
+    if(n == 0){
+        Close(clientfd);
+        return;
+    }
+
+    if(DEBUG){
+            P(&mutex);
+            printf("Receive ALL response header from end server !\n");
+            printf("Start to receive response body\n");
+            V(&mutex);
+    }
+
+    // receive response body from end server
+    for(int i = 0; i < content_length; ++i){
+        if(Rio_readnb_w(&rio_response, response, 1) == 0) return;
+        // forward to browser
+        if(Rio_writen_w(connfd, response, 1) != 1) return;
+        ++size;
+    }
+
+	// size_t group_size;
+	// while (content_length > 0){
+    //     if(content_length > GROUP_SIZE) group_size = GROUP_SIZE;
+    //     else group_size = content_length;
+    //     if(Rio_readnb_w(&rio_response, response, group_size) == 0) return;
+    //     // forward to browser
+    //     if(Rio_writen_w(connfd, response, group_size) != group_size) return;
+	// 	content_length -= group_size;
+    //     size += group_size;
+	// }
+
+
+    Close(clientfd);
+   
+
+    // log on screen
+    char logstring[MAXLINE];
+    format_log_entry(logstring, sockaddr, uri, size);
+
+    P(&mutex);
+    printf("%s\n",logstring);
+    V(&mutex);
+
+    
+}
+
+
+/*
+ * parse_uri - URI parser
+ *
+ * Given a URI from an HTTP proxy GET request (i.e., a URL), extract
+ * the host name, path name, and port.  The memory for hostname and
+ * pathname must already be allocated and should be at least MAXLINE
+ * bytes. Return -1 if there are any problems.
+ */
+int parse_uri(char *uri, char *hostname, char *pathname, char *port)
+{
+    char *hostbegin;
+    char *hostend;
+    char *pathbegin;
+    int len;
+
+    if (strncasecmp(uri, "http://", 7) != 0) {
+        hostname[0] = '\0';
+        return -1;
+    }
+
+    if(DEBUG){
+        printf("parse_uri: http:// \n");
+    }
+
+    /* Extract the host name */
+    hostbegin = uri + 7;
+    hostend = strpbrk(hostbegin, " :/\r\n\0");
+    if (hostend == NULL)
+        return -1;
+    len = hostend - hostbegin;
+    strncpy(hostname, hostbegin, len);
+    hostname[len] = '\0';
+
+    if(DEBUG){
+        printf("parse_uri: hostname get, %s\n", hostname);
+    }
+
+    /* Extract the port number */
+    if (*hostend == ':') {
+        char *p = hostend + 1;
+        while (isdigit(*p))
+            *port++ = *p++;
+        *port = '\0';
+    } else {
+        strcpy(port, "80");
+    }
+
+    if(DEBUG){
+        printf("parse_uri: port number get, %s\n", port);
+    }
+
+    /* Extract the path */
+    pathbegin = strchr(hostbegin, '/');
+    if (pathbegin == NULL) {
+        pathname[0] = '\0';
+    }
+    else {
+        pathbegin++;
+        strcpy(pathname, pathbegin);
+    }
+
+    if(DEBUG){
+        printf("parse_uri: path name get, %s\n", pathname);
+    }
+
+    return 0;
+}
+
+/*
+ * format_log_entry - Create a formatted log entry in logstring.
+ *
+ * The inputs are the socket address of the requesting client
+ * (sockaddr), the URI from the request (uri), the number of bytes
+ * from the server (size).
+ */
+void format_log_entry(char *logstring, struct sockaddr_in *sockaddr,
+                      char *uri, size_t size)
+{
+    time_t now;
+    char time_str[MAXLINE];
+    char host[INET_ADDRSTRLEN];
+
+    /* Get a formatted time string */
+    now = time(NULL);
+    strftime(time_str, MAXLINE, "%a %d %b %Y %H:%M:%S %Z", localtime(&now));
+
+    if (inet_ntop(AF_INET, &sockaddr->sin_addr, host, sizeof(host)) == NULL)
+        unix_error("Convert sockaddr_in to string representation failed\n");
+
+    /* Return the formatted log entry string */
+    sprintf(logstring, "%s: %s %s %zu", time_str, host, uri, size);
+}

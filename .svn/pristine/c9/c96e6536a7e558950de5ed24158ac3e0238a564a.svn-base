@@ -1,0 +1,42 @@
+# 520021910607 Tanziming
+# rsum_list
+
+    .pos 0
+    irmovq stack,%rsp
+    call main
+    halt
+
+# Sample linked list
+    .align 8
+ele1:
+    .quad 0x00a
+    .quad ele2
+ele2:
+    .quad 0x0b0
+    .quad ele3
+ele3:
+    .quad 0xc00
+    .quad 0
+
+
+main:
+    irmovq ele1,%rdi
+    call rsumlist
+    ret
+
+rsumlist:
+    irmovq $0,%rax   # return 0
+    andq %rdi,%rdi   # ls == 0 ?
+    je end
+    mrmovq (%rdi),%r10   # val = ls->val
+    mrmovq 8(%rdi),%rdi   # prepare %rdi
+    pushq %r10   # save %r10
+    call rsumlist
+    popq %r10
+    addq %r10,%rax   # val + rest
+end:
+    ret
+
+    .pos 0x200
+stack:
+
